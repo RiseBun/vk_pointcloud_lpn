@@ -1,0 +1,41 @@
+#!/bin/sh
+set -e
+
+# 程序安装目录（固定路径）
+VK_BIN_DIR="/opt/vk_pointcloud/bin"
+
+# 获取原用户（执行 sudo 的用户）的信息，若未用 sudo 则为当前用户
+ORIGINAL_USER="${SUDO_USER:-$USER}"
+ORIGINAL_HOME="$(eval echo ~${ORIGINAL_USER})"  # 原用户的家目录
+
+# root 用户的家目录（固定为 /root）
+ROOT_HOME="/root"
+
+# 定义要添加的 PATH 配置内容
+PATH_CONFIG="export PATH=\$PATH:${VK_BIN_DIR}"
+
+# 1. 处理原用户（可能是普通用户）的 .bashrc
+USER_BASHRC="${ORIGINAL_HOME}/.bashrc"
+if [ -f "$USER_BASHRC" ]; then
+    # 检查是否已存在配置，不存在则追加
+    grep -qxF "$PATH_CONFIG" "$USER_BASHRC" || {
+        echo "$PATH_CONFIG" >> "$USER_BASHRC"
+        echo "已添加路径到 ${ORIGINAL_USER} 的 .bashrc"
+    }
+else
+    echo "警告：未找到 ${USER_BASHRC}，跳过原用户配置"
+fi
+
+# 2. 处理 root 用户的 .bashrc（无论当前是否为 root，都确保 root 配置生效）
+ROOT_BASHRC="${ROOT_HOME}/.bashrc"
+if [ -f "$ROOT_BASHRC" ]; then
+    # 检查是否已存在配置，不存在则追加（需要 root 权限才能写入）
+    grep -qxF "$PATH_CONFIG" "$ROOT_BASHRC" || {
+        echo "$PATH_CONFIG" | sudo tee -a "$ROOT_BASHRC" > /dev/null
+        echo "已添加路径到 root 用户的 .bashrc"
+    }
+else
+    echo "警告：未找到 ${ROOT_BASHRC}，跳过 root 用户配置"
+fi
+
+echo "vk_pointcloud 路径已添加到当前终端 PATH"
