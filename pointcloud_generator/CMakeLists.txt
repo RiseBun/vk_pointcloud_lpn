@@ -101,29 +101,37 @@ if(NOT MSVC AND NOT IS_UBUNTU_24_04)
 
     # --- 4.3 轨迹优化工具 (核心目标) ---
     # 搜集所有相关源文件
-    file(GLOB TRAJECTORY_SOURCES 
-        "src/trajectory/main.cpp"
-        "src/trajectory/TrajectoryOptimizer.cpp"
-        "src/trajectory/TimeSync.cpp"
-        "src/trajectory/CalibLoader.cpp"
-    )
-    
-    add_executable(trajectory_optimizer
-        ${TRAJECTORY_SOURCES}
-    )
-    target_link_libraries(trajectory_optimizer PRIVATE
-        vk_common vk_modules vk_mcap vk_sdk
-        eCAL::core
-        Eigen3::Eigen
-        ${OpenCV_LIBS}
-        Open3D::Open3D
-        cereal::cereal
-        CLI11::CLI11
-        spdlog::spdlog
-        zstd::libzstd_static
-        LZ4::lz4_static
-        TBB::tbb
-    )
+    # --- 4.3 轨迹优化工具 ---
+file(GLOB TRAJECTORY_SOURCES 
+    "src/trajectory/main.cpp"
+    "src/trajectory/TrajectoryOptimizer.cpp"
+    "src/trajectory/TimeSync.cpp"
+    "src/trajectory/CalibLoader.cpp"
+)
+
+# 寻找 capnp 静态库路径 (基于你的 cache 结构)
+set(CAPNP_LIB_DIR "${CMAKE_SOURCE_DIR}/cache/capnp-install/lib")
+
+add_executable(trajectory_optimizer
+    ${TRAJECTORY_SOURCES}
+)
+
+target_link_libraries(trajectory_optimizer PRIVATE
+    vk_common vk_modules vk_mcap vk_sdk
+    eCAL::core
+    Eigen3::Eigen
+    ${OpenCV_LIBS}
+    Open3D::Open3D
+    cereal::cereal
+    CLI11::CLI11
+    spdlog::spdlog
+    zstd::libzstd_static
+    LZ4::lz4_static
+    TBB::tbb
+    # --- 新增以下三行用于解决 capnp 未定义引用错误 ---
+    ${CAPNP_LIB_DIR}/libcapnp.a
+    ${CAPNP_LIB_DIR}/libkj.a
+)
 
     # 设置 RPATH
     set_target_properties(point_cloud_gen PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")

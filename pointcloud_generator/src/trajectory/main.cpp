@@ -1,88 +1,103 @@
 #include <iostream>
-#include <thread>
-#include <atomic>
-#include <chrono>
 #include <fstream>
-#include <ecal/ecal.h>
-#include <ecal/msg/capnproto/subscriber.h>
+#include <iomanip>
+#include <map>
+#include <Eigen/Dense>
+
+#define MCAP_IMPLEMENTATION
+#include <mcap/reader.hpp>
 
 #include "trajectory/CalibLoader.hpp"
-#include "trajectory/TimeSync.hpp"
-// 这里需要根据你的 vk_sdk 路径 include 对应的 capnp 头文件
-#include <vk_sdk/capnp/disparity.capnp.h>
 #include <vk_sdk/capnp/odometry3d.capnp.h>
+#include <vk_sdk/capnp/image.capnp.h>
+#include <capnp/serialize.h>
 
 using namespace trajectory;
 
-std::atomic<bool> g_running{true};
+// 离线处理函数声明
+void process_offline_mcap(const std::string& mcap_in, const std::string& json_in, const std::string& txt_out);
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "Usage: ./trajectory_optimizer <saved_calib.json> <output_poses.txt>" << std::endl;
+    if (argc < 4) {
+        std::cerr << "Usage: ./trajectory_optimizer <input.mcap> <saved_calib.json> <output_poses.txt>" << std::endl;
         return -1;
     }
     
-    std::string calib_path = argv[1];
-    std::string output_path = argv[2];
+    std::string mcap_path = argv[1];
+    std::string calib_path = argv[2];
+    std::string output_path = argv[3];
 
-    // 1. 加载标定
-    CalibLoader calib;
-    if (!calib.load(calib_path)) {
+    try {
+        process_offline_mcap(mcap_path, calib_path, output_path);
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal Error: " << e.what() << std::endl;
         return -1;
     }
-    std::cout << "Calibration loaded. Time offset: " << calib.getCamTimeOffsetNs() << std::endl;
 
-    // 2. 初始化 eCAL
-    eCAL::Initialize(argc, argv, "TrajectoryOptimizer");
-    
-    // 3. 初始化时间同步
-    TimeSync sync(calib.getCamTimeOffsetNs());
-
-    // 4. 设置 eCAL 订阅 (直接用 Capnp Subscriber)
-    // 假设 Topic 名字如下，请根据实际情况修改
-    eCAL::capnproto::Subscriber<vkc::Disparity> sub_left("S1/stereo1_l/disparity");
-    eCAL::capnproto::Subscriber<vkc::Disparity> sub_right("S1/stereo2_r/disparity");
-    eCAL::capnproto::Subscriber<vkc::Odometry3d> sub_odom("S1/vio_odom");
-
-    auto on_left = [&](const eCAL::capnproto::Msg<vkc::Disparity>& msg) {
-        // 这里 msg 已经是 capnp reader 封装，需要转成 vkc::Shared 或者直接把数据拷进去
-        // 为了配合上面的 TimeSync 接口 (vkc::Shared)，可能需要一点适配代码
-        // 这里为了 MVP 演示，假设有一个转换函数
-        // sync.addLeftDisp(convert(msg)); 
-        // *实际写代码时，这一步如果是 vk_sdk 的 Receiver 就会自动处理好 Shared 指针*
-    };
-    
-    // 如果不想依赖 vk_sdk 的 Receiver 封装，可以直接修改 TimeSync 接收 capnp Reader
-    
-    std::cout << "Waiting for data..." << std::endl;
-
-    // 5. 主循环处理
-    std::ofstream out_file(output_path);
-    out_file << "# t_ns tx ty tz qx qy qz qw" << std::endl;
-
-    while (eCAL::Ok() && g_running) {
-        // 尝试获取同步帧
-        auto packet_opt = sync.tryGetNextPacket();
-        
-        if (packet_opt) {
-            auto& pkt = *packet_opt;
-            if (pkt.interpolated_odom_pose) {
-                // 导出 Pose
-                auto p = pkt.interpolated_odom_pose.value();
-                Eigen::Vector3d t = p.translation();
-                Eigen::Quaterniond q(p.linear());
-                
-                out_file << pkt.timestamp_ns << " " 
-                         << t.x() << " " << t.y() << " " << t.z() << " "
-                         << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << std::endl;
-                         
-                std::cout << "Synced frame at " << pkt.timestamp_ns << std::endl;
-            }
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    eCAL::Finalize();
     return 0;
+}
+
+void process_offline_mcap(const std::string& mcap_in, const std::string& json_in, const std::string& txt_out) {
+    // 1. 加载标定 (获取 8ms 偏移量)
+    CalibLoader calib;
+    if (!calib.load(json_in)) {
+        throw std::runtime_error("Could not load calibration JSON: " + json_in);
+    }
+    int64_t offset_ns = calib.getCamTimeOffsetNs();
+    std::cout << "[1/3] Calibration loaded. Time offset: " << offset_ns << " ns" << std::endl;
+
+    // 2. 读取 VIO 轨迹
+    mcap::McapReader reader;
+    if (!reader.open(mcap_in).ok()) throw std::runtime_error("Failed to open MCAP: " + mcap_in);
+
+    const std::string VIO_TOPIC = "S1/vio_odom"; 
+    const std::string LEFT_CAM_TOPIC = "S1/stereo1_l";
+
+    std::map<int64_t, Eigen::Isometry3d> vio_map;
+    mcap::ReadMessageOptions options;
+    options.topicFilter = [&](std::string_view topic) { return topic == VIO_TOPIC; };
+    
+    for (const auto& msg : reader.readMessages([](const auto&){}, options)) {
+        kj::ArrayPtr<const capnp::word> wordPtr(reinterpret_cast<const capnp::word*>(msg.message.data), msg.message.dataSize / sizeof(capnp::word));
+        capnp::FlatArrayMessageReader cap_reader(wordPtr);
+        auto odom = cap_reader.getRoot<vkc::Odometry3d>();
+        
+        auto pos = odom.getPose().getPosition();
+        auto rot = odom.getPose().getOrientation();
+        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+        T.translation() << pos.getX(), pos.getY(), pos.getZ();
+        T.linear() = Eigen::Quaterniond(rot.getW(), rot.getX(), rot.getY(), rot.getZ()).toRotationMatrix();
+        
+        vio_map[odom.getHeader().getStampMonotonic()] = T;
+    }
+    std::cout << "[2/3] Read " << vio_map.size() << " VIO poses." << std::endl;
+
+    // 3. 对齐图像时间戳并插值输出
+    std::ofstream out_file(txt_out);
+    out_file << std::fixed << std::setprecision(9);
+    options.topicFilter = [&](std::string_view topic) { return topic == LEFT_CAM_TOPIC; };
+    
+    int count = 0;
+    for (const auto& msg : reader.readMessages([](const auto&){}, options)) {
+        kj::ArrayPtr<const capnp::word> wordPtr(reinterpret_cast<const capnp::word*>(msg.message.data), msg.message.dataSize / sizeof(capnp::word));
+        capnp::FlatArrayMessageReader cap_reader(wordPtr);
+        auto img = cap_reader.getRoot<vkc::Image>();
+        
+        int64_t img_t = img.getHeader().getStampMonotonic();
+        int64_t query_t = img_t + offset_ns;
+
+        auto it = vio_map.lower_bound(query_t);
+        if (it == vio_map.end() || it == vio_map.begin()) continue;
+
+        auto it_prev = std::prev(it);
+        double alpha = (double)(query_t - it_prev->first) / (it->first - it_prev->first);
+        
+        Eigen::Vector3d t = it_prev->second.translation() * (1.0 - alpha) + it->second.translation() * alpha;
+        Eigen::Quaterniond q = Eigen::Quaterniond(it_prev->second.linear()).slerp(alpha, Eigen::Quaterniond(it->second.linear()));
+
+        out_file << img_t << " " << t.x() << " " << t.y() << " " << t.z() << " "
+                 << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+        count++;
+    }
+    std::cout << "[3/3] Success! Saved " << count << " aligned poses to " << txt_out << std::endl;
 }
