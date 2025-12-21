@@ -22,7 +22,7 @@ using namespace trajectory;
 void process_offline_mcap(const std::string& mcap_in, const std::string& json_in, const std::string& txt_out);
 
 int main(int argc, char** argv) {
-    // 检查参数数量：必须是 3 个文件路径
+    // 检查参数数量：必须是 3 个文件路径 (MCAP, JSON, Output)
     if (argc < 4) {
         std::cerr << "Usage: ./trajectory_optimizer <input.mcap> <saved_calib.json> <output_poses.txt>" << std::endl;
         return -1;
@@ -31,6 +31,11 @@ int main(int argc, char** argv) {
     std::string mcap_path = argv[1];
     std::string calib_path = argv[2];
     std::string output_path = argv[3];
+
+    std::cout << "--- Trajectory Optimizer (Offline) ---" << std::endl;
+    std::cout << "Input MCAP: " << mcap_path << std::endl;
+    std::cout << "Input JSON: " << calib_path << std::endl;
+    std::cout << "Output TXT: " << output_path << std::endl;
 
     try {
         process_offline_mcap(mcap_path, calib_path, output_path);
@@ -46,7 +51,7 @@ void process_offline_mcap(const std::string& mcap_in, const std::string& json_in
     // 1. 加载标定 (为了获取 8ms 的时间偏移)
     CalibLoader calib;
     if (!calib.load(json_in)) {
-        throw std::runtime_error("Could not load calibration JSON: " + json_in);
+        throw std::runtime_error("Could not load calibration JSON (check path or format): " + json_in);
     }
     int64_t offset_ns = calib.getCamTimeOffsetNs();
     std::cout << "[Step 1] Calibration loaded. Time Offset: " << offset_ns << " ns" << std::endl;
@@ -62,14 +67,14 @@ void process_offline_mcap(const std::string& mcap_in, const std::string& json_in
     const std::string LEFT_CAM_TOPIC = "S1/stereo1_l";
 
     // 3. 读取所有 VIO 姿态并存入 Map (按时间戳排序)
-    std::cout << "[Step 2] Reading VIO poses..." << std::endl;
+    std::cout << "[Step 2] Reading VIO poses from topic: " << VIO_TOPIC << " ..." << std::endl;
     std::map<int64_t, Eigen::Isometry3d> vio_map;
     
     mcap::ReadMessageOptions options;
     options.topicFilter = [&](std::string_view topic) { return topic == VIO_TOPIC; };
     
     for (const auto& msg : reader.readMessages([](const auto&){}, options)) {
-        // Capnp 内存对齐转换 (防止崩溃的关键)
+        // Capnp 内存对齐转换
         kj::ArrayPtr<const capnp::word> wordPtr(
             reinterpret_cast<const capnp::word*>(msg.message.data), 
             msg.message.dataSize / sizeof(capnp::word)
@@ -89,15 +94,13 @@ void process_offline_mcap(const std::string& mcap_in, const std::string& json_in
     std::cout << "  - Found " << vio_map.size() << " VIO messages." << std::endl;
 
     if (vio_map.empty()) {
-        throw std::runtime_error("No VIO data found! Check topic name: " + VIO_TOPIC);
+        throw std::runtime_error("No VIO data found! Check if topic name matches (e.g. S0 vs S1).");
     }
 
     // 4. 遍历图像时间戳，进行插值对齐
     std::cout << "[Step 3] Syncing and interpolating..." << std::endl;
     std::ofstream out_file(txt_out);
     out_file << std::fixed << std::setprecision(9);
-    // 可选：写个表头 (point_cloud_gen 其实不需要表头，但方便阅读)
-    // out_file << "# timestamp tx ty tz qx qy qz qw" << std::endl;
 
     options.topicFilter = [&](std::string_view topic) { return topic == LEFT_CAM_TOPIC; };
     
@@ -118,23 +121,19 @@ void process_offline_mcap(const std::string& mcap_in, const std::string& json_in
         // 在 VIO Map 中寻找 query_t 的位置
         auto it = vio_map.lower_bound(query_t);
         if (it == vio_map.end() || it == vio_map.begin()) {
-            continue; // 超出 VIO 范围，跳过
+            continue; 
         }
 
         auto it_prev = std::prev(it);
         
-        // 计算插值系数 alpha
         double alpha = (double)(query_t - it_prev->first) / (double)(it->first - it_prev->first);
         
-        // 线性插值位置
         Eigen::Vector3d t = it_prev->second.translation() * (1.0 - alpha) + it->second.translation() * alpha;
         
-        // 球面线性插值旋转 (Slerp)
         Eigen::Quaterniond q1(it_prev->second.linear());
         Eigen::Quaterniond q2(it->second.linear());
         Eigen::Quaterniond q = q1.slerp(alpha, q2);
 
-        // 输出格式：图像时间戳 + 修正后的位姿
         out_file << img_t << " " 
                  << t.x() << " " << t.y() << " " << t.z() << " "
                  << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";

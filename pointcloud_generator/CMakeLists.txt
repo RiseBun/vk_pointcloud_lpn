@@ -104,7 +104,6 @@ if(NOT MSVC AND NOT IS_UBUNTU_24_04)
     # --- 4.3 轨迹优化工具 ---
 file(GLOB TRAJECTORY_SOURCES 
     "src/trajectory/main.cpp"
-    "src/trajectory/TrajectoryOptimizer.cpp"
     "src/trajectory/TimeSync.cpp"
     "src/trajectory/CalibLoader.cpp"
 )
