@@ -18,7 +18,7 @@ endif()
 #======================================================
 # 2. 依赖项配置 (优先使用项目内置 cache)
 #======================================================
-# 注意：已根据你的实际目录结构将 ../cache 修正为 ${CMAKE_SOURCE_DIR}/cache
+# 修正路径：确保指向项目根目录下的 cache 文件夹
 list(APPEND CMAKE_PREFIX_PATH
     "${CMAKE_SOURCE_DIR}/cache/eigen3-install/share/eigen3/cmake"
     "${CMAKE_SOURCE_DIR}/cache/spdlog-install/lib/cmake/spdlog"
@@ -37,6 +37,9 @@ find_package(CLI11 REQUIRED)
 find_package(cereal REQUIRED)
 find_package(OpenCV REQUIRED)
 
+# 显式寻找 eCAL 依赖（main.cpp 直接使用）
+find_package(eCAL REQUIRED)
+
 # 压缩相关依赖
 set(zstd_DIR "${CMAKE_SOURCE_DIR}/cache/zstd-install/lib/cmake/zstd")
 find_package(zstd CONFIG REQUIRED)
@@ -46,27 +49,25 @@ find_package(lz4 CONFIG REQUIRED)
 #======================================================
 # 3. 库与头文件路径设置
 #======================================================
-# 设置本地库搜索目录 (用于链接 libvk_sdk.so 等)
+# 设置本地库搜索目录
 link_directories(${CMAKE_SOURCE_DIR}/../lib)
 
-#======================================================
-# 3. Include directories (更新版)
-#======================================================
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/../include
     ${CMAKE_SOURCE_DIR}/cache/mcap-include
     ${CMAKE_SOURCE_DIR}/cache/capnp-install/include
-    ${CMAKE_SOURCE_DIR}/cache/lz4-install/include   # 新增
-    ${CMAKE_SOURCE_DIR}/cache/zstd-install/include  # 新增
+    ${CMAKE_SOURCE_DIR}/cache/lz4-install/include
+    ${CMAKE_SOURCE_DIR}/cache/zstd-install/include
     ${OpenCV_INCLUDE_DIRS}
 )
+
 #======================================================
 # 4. 定义可执行目标
 #======================================================
 if(NOT MSVC AND NOT IS_UBUNTU_24_04)
 
-    # --- 4.1 原始点云生成工具 (point_cloud_gen) ---
+    # --- 4.1 原始点云生成工具 ---
     add_executable(point_cloud_gen
         src/pointcloud/PointCloudGenerator.cpp
     )
@@ -83,7 +84,7 @@ if(NOT MSVC AND NOT IS_UBUNTU_24_04)
         LZ4::lz4_static
     )
 
-    # --- 4.2 点云拼接工具 (accum_pointcloud) ---
+    # --- 4.2 点云拼接工具 ---
     add_executable(accum_pointcloud
         src/pointcloud/AccumPointClouds.cpp
     )
@@ -98,15 +99,21 @@ if(NOT MSVC AND NOT IS_UBUNTU_24_04)
         LZ4::lz4_static
     )
 
-    # --- 4.3 新增：轨迹优化工具 (trajectory_optimizer) ---
-    # 自动搜集 src/trajectory/ 下的所有 cpp 文件
-    file(GLOB TRAJECTORY_SOURCES "src/trajectory/*.cpp")
+    # --- 4.3 轨迹优化工具 (核心目标) ---
+    # 搜集所有相关源文件
+    file(GLOB TRAJECTORY_SOURCES 
+        "src/trajectory/main.cpp"
+        "src/trajectory/TrajectoryOptimizer.cpp"
+        "src/trajectory/TimeSync.cpp"
+        "src/trajectory/CalibLoader.cpp"
+    )
     
     add_executable(trajectory_optimizer
         ${TRAJECTORY_SOURCES}
     )
     target_link_libraries(trajectory_optimizer PRIVATE
         vk_common vk_modules vk_mcap vk_sdk
+        eCAL::core
         Eigen3::Eigen
         ${OpenCV_LIBS}
         Open3D::Open3D
@@ -118,7 +125,7 @@ if(NOT MSVC AND NOT IS_UBUNTU_24_04)
         TBB::tbb
     )
 
-    # 设置 RPATH 确保程序运行时能找到同级 lib 目录下的库
+    # 设置 RPATH
     set_target_properties(point_cloud_gen PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
     set_target_properties(accum_pointcloud PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
     set_target_properties(trajectory_optimizer PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
@@ -132,7 +139,6 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "/opt/vk_pointcloud" CACHE PATH "Installation Directory" FORCE)
 endif()
 
-# 安装二进制文件
 install(TARGETS 
     point_cloud_gen  
     accum_pointcloud
@@ -142,7 +148,6 @@ install(TARGETS
     ARCHIVE DESTINATION lib
 )
 
-# 安装 SDK 动态库
 set(VK_SDK_LIB_PATH "${CMAKE_SOURCE_DIR}/../lib/libvk_sdk.so.1.4.0")
 set(VK_SDK_LINK_PATH "${CMAKE_SOURCE_DIR}/../lib/libvk_sdk.so")
 
@@ -151,7 +156,6 @@ install(
   DESTINATION lib
 )
 
-# CPack Debian 打包配置
 set(CPACK_PACKAGING_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/" ${CMAKE_MODULE_PATH})
 include(CPackConfigDeb)

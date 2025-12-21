@@ -43,8 +43,11 @@ PoseData ExtractPose(const mcap::Message& msg) {
     // 如果有 Preamble，通常是 24 字节或更多，需要 offset
     
     // 使用 kj::ArrayPtr 包装数据
-    kj::ArrayPtr<const kj::byte> arrayPtr(data_ptr, data_size);
-    capnp::FlatArrayMessageReader reader(arrayPtr);
+    kj::ArrayPtr<const capnp::word> wordPtr(
+    reinterpret_cast<const capnp::word*>(data_ptr), 
+    data_size / sizeof(capnp::word)
+);
+capnp::FlatArrayMessageReader reader(wordPtr);
     auto odom = reader.getRoot<vkc::Odometry3d>();
     
     PoseData p;
@@ -121,8 +124,11 @@ int main(int argc, char** argv) {
         // 解析图像 Header 获取时间戳
         auto data_ptr = reinterpret_cast<const kj::byte*>(msg.message.data);
         auto data_size = msg.message.dataSize;
-        kj::ArrayPtr<const kj::byte> arrayPtr(data_ptr, data_size);
-        capnp::FlatArrayMessageReader capnp_reader(arrayPtr);
+        kj::ArrayPtr<const capnp::word> wordPtr(
+    reinterpret_cast<const capnp::word*>(data_ptr), 
+    data_size / sizeof(capnp::word)
+);
+capnp::FlatArrayMessageReader reader(wordPtr);
         auto image = capnp_reader.getRoot<vkc::Image>();
         
         int64_t img_time_ns = image.getHeader().getStampMonotonic();

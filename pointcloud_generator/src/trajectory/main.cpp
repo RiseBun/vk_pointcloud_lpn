@@ -2,7 +2,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
-
+#include <fstream>
 #include <ecal/ecal.h>
 #include <ecal/msg/capnproto/subscriber.h>
 
