@@ -1,0 +1,32 @@
+{
+  "point_cloud_generator": {
+    "pre_voxel_downsample": true,
+    "pre_voxel_size": 0.005,
+
+    "voxel_downsample": false,
+    "voxel_size": 0.01,
+
+    "uniform_downsample": false,
+    "uniform_downsample_points": 50000,
+
+    "sor_neighbors": 50,
+    "sor_stddev": 1.0,
+
+    "skip_interval": 1,
+    "accumulate_interval": 1,
+
+    "radius_outlier_removal": true,
+    "ror_points": 15,
+    "ror_radius": 0.05,
+
+    "disparity_offset": 0,
+    "max_depth": 6.0,
+
+    "remove_statistical_outlier": true,
+    "omit_left": false,
+    "omit_right": false,
+
+    "compressed": true,
+    "chunk_size": 3000000
+  }
+}
